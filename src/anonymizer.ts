@@ -25,6 +25,13 @@ export function anonymizeXmlDoc(xmlDoc: Document): void {
 
   const shouldAnonymize = (el: Element): boolean => {
     const tag = el.localName.toLowerCase();
+
+    const parent = el.parentElement?.localName.toLowerCase() || '';
+
+    // Preserve technical metadata like Profile/Guideline ID and Document Name (e.g. "INVOICE")
+    if (tag === 'id' && parent === 'guidelinespecifieddocumentcontextparameter') return false;
+    if (tag === 'name' && parent === 'exchangeddocument') return false;
+
     if (FORCED_TAGS.has(tag)) return true;
 
     if (WHITELIST_SUFFIXES.some(s => tag.endsWith(s))) return false;
