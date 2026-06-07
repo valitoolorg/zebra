@@ -56,10 +56,21 @@ export function anonymizeXmlDoc(xmlDoc: Document): void {
     return false;
   };
 
+  const ATTACHMENT_TAGS = new Set(['attachmentbinaryobject', 'embeddeddocumentbinaryobject']);
+
   const walk = (node: Node): void => {
     if (node.nodeType === Node.ELEMENT_NODE) {
       const el = node as Element;
-      if (shouldAnonymize(el)) {
+      const tag = el.localName.toLowerCase();
+
+      if (ATTACHMENT_TAGS.has(tag)) {
+        for (let i = 0; i < el.childNodes.length; i++) {
+          const child = el.childNodes[i];
+          if (child.nodeType === Node.TEXT_NODE) {
+            child.textContent = 'RHVtbXktQW5oYW5n'; // "Dummy-Anhang" in base64
+          }
+        }
+      } else if (shouldAnonymize(el)) {
         for (let i = 0; i < el.childNodes.length; i++) {
           const child = el.childNodes[i];
           if (child.nodeType === Node.TEXT_NODE) {
@@ -67,6 +78,7 @@ export function anonymizeXmlDoc(xmlDoc: Document): void {
           }
         }
       }
+
       for (let i = 0; i < el.childNodes.length; i++) {
         walk(el.childNodes[i]);
       }
