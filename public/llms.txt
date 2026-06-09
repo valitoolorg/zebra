@@ -1,0 +1,28 @@
+# ZEBRA - E-Invoice Anonymizer
+> Privacy-focused, 100% client-side web application for anonymizing ZUGFeRD and XRechnung e-invoices securely in the browser.
+
+## Overview
+ZEBRA is designed to strip sensitive personal and business information from electronic invoice data while preserving the structural integrity of the document for testing, development, or sharing. 
+
+It processes both standalone `.xml` files (ZUGFeRD/XRechnung) and Hybrid-PDFs (`.pdf` containing embedded XML).
+
+## Core Features
+- **Client-Side Processing:** All parsing and anonymization happen entirely in the client browser. No invoice files or data are uploaded to any server.
+- **Smart Anonymization:** Substitutes name, address, ID, and contact details with randomized, case- and type-preserving data.
+- **Format Support:** Extraction of embedded XML from Hybrid-PDFs using PDF.js and standard XML anonymization.
+- **PWA Ready:** Available for offline use as a Progressive Web App.
+- **Multi-language Support (i18n):** User interface localized in English, German, and French.
+
+## Technical Details
+- **Tech Stack:** Vite, TypeScript, Vanilla CSS, PDF.js (for hybrid PDFs).
+- **Anonymization Rules:**
+  - **Whitelisted tags (preserved):** Elements ending with `code`, `date`, `time`, `amount`, `percent`, `tax`, `currency`, `indicator`.
+  - **Blacklisted tags (anonymized):** Elements ending with `name`, `street`, `city`, `lineone`, `linetwo`, `person`, `contact`, `telephone`, `telefax`, `mail`, `note`, `description`, `content`.
+  - **Forced tags (always anonymized):** `ibanid`, `postcodecode`, `globalid`, `completenumber`, `uriid`, `id`, `sellerassignedid`.
+  - **Attachments:** Embedded objects (`attachmentbinaryobject`, `embeddeddocumentbinaryobject`) are cleared or replaced with dummy content.
+
+## Links & Resources
+- [ZEBRA Web Application](https://zebra.valitool.org/) - Main application page.
+- [GitHub Repository](https://github.com/valitoolorg/zebra) - Source code and issue tracker.
+- [Sitemap](https://zebra.valitool.org/sitemap.xml) - Site URL index.
+- [robots.txt](https://zebra.valitool.org/robots.txt) - Web crawler instructions.
