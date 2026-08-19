@@ -135,7 +135,9 @@ function render() {
   app.innerHTML = originalDoc ? renderViewerHtml() : renderDropzoneHtml();
   if (originalDoc) {
     const container = document.getElementById('xmlViewer')!;
-    container.appendChild(formatXml(isAnonView ? anonymizedDoc! : originalDoc));
+    container.appendChild(isAnonView
+      ? formatXml(anonymizedDoc!, originalDoc)
+      : formatXml(originalDoc, anonymizedDoc));
     attachViewerEvents();
   } else {
     attachDropzoneEvents();
@@ -229,47 +231,58 @@ function attachHeaderEvents() {
   }));
 }
 
-function formatXml(doc: Document): DocumentFragment {
+/**
+ * Renders the document, marking every value that differs from `counterpart`.
+ *
+ * Both documents share their element structure (the anonymized one is a clone),
+ * so they can be walked in lockstep. Shown in either direction: in the anonymized
+ * view the marks say what was replaced, in the original what will be — which is
+ * what makes over- and under-anonymization visible at a glance.
+ */
+function formatXml(doc: Document, counterpart?: Document | null): DocumentFragment {
   const fragment = document.createDocumentFragment();
-  
-  const traverse = (node: Node, indent = 0) => {
+
+  const span = (className: string, text: string, changed = false): HTMLSpanElement => {
+    const s = document.createElement('span');
+    s.className = changed ? `${className} changed` : className;
+    s.textContent = text;
+    return s;
+  };
+
+  const traverse = (node: Node, other: Element | undefined, indent = 0) => {
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     const el = node as Element;
+
+    // Only compare against a counterpart that really is the same element.
+    const twin = other?.nodeName === el.nodeName ? other : undefined;
     const spacing = '  '.repeat(indent);
     const line = document.createElement('div');
-    
-    const tag = (text: string) => {
-      const s = document.createElement('span');
-      s.className = 'xml-tag';
-      s.textContent = text;
-      return s;
-    };
 
-    let attrStr = '';
-    for (let i = 0; i < el.attributes.length; i++) {
-      const a = el.attributes[i];
-      attrStr += ` ${a.name}="${a.value}"`;
+    line.appendChild(span('xml-tag', `${spacing}<${el.nodeName}`));
+    for (const attr of Array.from(el.attributes)) {
+      line.appendChild(span('xml-tag', ` ${attr.name}="`));
+      line.appendChild(span('xml-attr-value', attr.value, twin !== undefined && twin.getAttribute(attr.name) !== attr.value));
+      line.appendChild(span('xml-tag', '"'));
     }
-
-    line.appendChild(tag(`${spacing}<${el.nodeName}${attrStr}>`));
+    line.appendChild(span('xml-tag', '>'));
 
     if (el.children.length > 0) {
       fragment.appendChild(line);
-      for (let i = 0; i < el.childNodes.length; i++) traverse(el.childNodes[i], indent + 1);
+      for (let i = 0; i < el.children.length; i++) {
+        traverse(el.children[i], twin?.children[i], indent + 1);
+      }
       const closeLine = document.createElement('div');
-      closeLine.appendChild(tag(`${spacing}</${el.nodeName}>`));
+      closeLine.appendChild(span('xml-tag', `${spacing}</${el.nodeName}>`));
       fragment.appendChild(closeLine);
     } else {
-      const val = document.createElement('span');
-      val.className = 'xml-value';
-      val.textContent = el.textContent || '';
-      line.appendChild(val);
-      line.appendChild(tag(`</${el.nodeName}>`));
+      const value = el.textContent || '';
+      line.appendChild(span('xml-value', value, twin !== undefined && twin.textContent !== value));
+      line.appendChild(span('xml-tag', `</${el.nodeName}>`));
       fragment.appendChild(line);
     }
   };
 
-  traverse(doc.documentElement);
+  traverse(doc.documentElement, counterpart?.documentElement ?? undefined);
   return fragment;
 }
 

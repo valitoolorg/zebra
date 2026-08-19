@@ -35,6 +35,7 @@
   --border: 214.3 31.8% 91.4%;
   --input: 214.3 31.8% 91.4%;
   --ring: 85 36% 49%;
+  --changed: 32 95% 38%;
   --radius: 0.5rem;
 }
 
@@ -58,6 +59,7 @@
   --border: 217.2 32.6% 17.5%;
   --input: 217.2 32.6% 17.5%;
   --ring: 224.3 76.3% 48%;
+  --changed: 38 95% 60%;
 }
 
 * {
@@ -214,6 +216,22 @@ button.ghost {
 .xml-value {
   color: hsl(var(--primary));
   font-weight: 600;
+}
+
+.xml-attr-value {
+  color: hsl(var(--muted-foreground));
+  opacity: 0.7;
+}
+
+/* Values the anonymizer replaced. Shown in both views: in the anonymized one
+   it marks what was changed, in the original what will be. */
+.xml-value.changed,
+.xml-attr-value.changed {
+  color: hsl(var(--changed));
+  background-color: hsl(var(--changed) / 0.14);
+  border-radius: 3px;
+  padding: 0 0.15em;
+  opacity: 1;
 }
 
 /* Floating Controls */
