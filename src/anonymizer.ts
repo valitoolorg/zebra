@@ -15,11 +15,11 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { anonymizeIban, isValidIban, looksLikeIban, anonymizeVatId, isSupportedVatId } from './checksums';
+import { anonymizeIban, isValidIban, looksLikeIban, anonymizeBic, looksLikeBic, anonymizeVatId, isSupportedVatId } from './checksums';
 
 const WHITELIST_SUFFIXES = ['code', 'date', 'time', 'amount', 'percent', 'tax', 'currency', 'indicator'];
 const BLACKLIST_SUFFIXES = ['name', 'street', 'city', 'lineone', 'linetwo', 'person', 'contact', 'telephone', 'telefax', 'mail', 'note', 'description', 'content'];
-const FORCED_TAGS = new Set(['ibanid', 'postcodecode', 'globalid', 'completenumber', 'uriid', 'id', 'sellerassignedid']);
+const FORCED_TAGS = new Set(['ibanid', 'bicid', 'companyid', 'postcodecode', 'globalid', 'completenumber', 'uriid', 'id', 'sellerassignedid']);
 
 const LOWER_CHARS = "abcdefghijklmnopqrstuvwxyzäöüß";
 const UPPER_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ";
@@ -49,10 +49,18 @@ export function anonymizeXmlDoc(xmlDoc: Document): void {
     return tag === 'ibanid' || parent.endsWith('financialaccount');
   };
 
+  // Tags that hold a BIC. Matched by context rather than by value, because a
+  // plain 8-letter word (a company name, say) also matches the BIC pattern.
+  const isBicContext = (el: Element): boolean => {
+    const tag = el.localName.toLowerCase();
+    const parent = el.parentElement?.localName.toLowerCase() || '';
+    return tag === 'bicid' || parent.endsWith('financialinstitution') || parent.endsWith('financialinstitutionbranch');
+  };
+
   /**
-   * Anonymizes a single value. Identifiers carrying a check digit (IBAN, VAT ID)
-   * are regenerated with a valid checksum instead of being scrambled, so that
-   * validators do not reject the anonymized invoice.
+   * Anonymizes a single value. Structured identifiers (IBAN, VAT ID, BIC) are
+   * regenerated so they keep a valid check digit or format, instead of being
+   * scrambled into something validators reject.
    */
   const anonymizeValue = (text: string, el: Element): string => {
     const value = text.trim();
@@ -61,6 +69,7 @@ export function anonymizeXmlDoc(xmlDoc: Document): void {
     let replacement: string | null = null;
     if (isSupportedVatId(value)) replacement = anonymizeVatId(value);
     else if (looksLikeIban(value) && (isValidIban(value) || isIbanContext(el))) replacement = anonymizeIban(value);
+    else if (isBicContext(el) && looksLikeBic(value)) replacement = anonymizeBic(value);
 
     if (replacement === null) return anonymizeText(text);
     return text.replace(value, replacement); // keep surrounding whitespace
@@ -74,6 +83,11 @@ export function anonymizeXmlDoc(xmlDoc: Document): void {
     // Preserve technical metadata like Profile/Guideline ID and Document Name (e.g. "INVOICE")
     if (tag === 'id' && parent === 'guidelinespecifieddocumentcontextparameter') return false;
     if (tag === 'name' && parent === 'exchangeddocument') return false;
+
+    // UBL code list identifiers, not business data: TaxScheme/ID carries "VAT",
+    // TaxCategory/ID carries the category code ("S", "Z", "E", ...). Scrambling
+    // them makes the invoice fail EN 16931 validation.
+    if (tag === 'id' && (parent === 'taxscheme' || parent.endsWith('taxcategory'))) return false;
 
     if (FORCED_TAGS.has(tag)) return true;
 

@@ -16,17 +16,19 @@
 */
 
 /*
- * Checksum-aware anonymization for identifiers that carry a check digit.
+ * Format-preserving anonymization for structured identifiers.
  *
- * Plain random replacement destroys these checksums, which makes downstream
- * validators (Mustang, KoSIT, VeR) reject the anonymized invoice with errors
- * like "IBAN is invalid". The helpers below produce random values that still
- * satisfy the published check-digit rules.
+ * Plain random replacement destroys check digits and format constraints, which
+ * makes downstream validators (Mustang, KoSIT, VeR) reject the anonymized
+ * invoice with errors like "IBAN is invalid". The helpers below produce random
+ * values that still satisfy the published rules — check digits for IBAN and
+ * VAT IDs, and the ISO 9362 character pattern for BICs.
  */
 
 const DIGITS = '0123456789';
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
+const randomFrom = (chars: string): string => chars[Math.floor(Math.random() * chars.length)];
 const randomDigit = (): string => DIGITS[Math.floor(Math.random() * 10)];
 const randomLetter = (): string => LETTERS[Math.floor(Math.random() * 26)];
 const randomDigits = (n: number): string => Array.from({ length: n }, randomDigit).join('');
@@ -102,6 +104,37 @@ export function anonymizeIban(value: string): string {
 
   // Restore grouped formatting if the source used it (e.g. "DE89 3704 0044 ...").
   return /\s/.test(value) ? (result.match(/.{1,4}/g) ?? [result]).join(' ') : result;
+}
+
+/* ------------------------------------------------------------------- BIC */
+
+/*
+ * ISO 9362 / ISO 20022 pattern: [A-Z]{6}[A-Z2-9][A-NP-Z0-9]([A-Z0-9]{3})?
+ * Positions 1-4 bank code, 5-6 ISO 3166 country, 7-8 location, 9-11 optional
+ * branch. Note the exclusions: position 7 rejects 0 and 1, position 8 rejects O.
+ */
+const BIC_PATTERN = /^[A-Z]{6}[A-Z2-9][A-NP-Z0-9]([A-Z0-9]{3})?$/;
+
+/** True if `value` matches the ISO 9362 BIC pattern. */
+export function looksLikeBic(value: string): boolean {
+  return BIC_PATTERN.test(value.replace(/\s+/g, '').toUpperCase());
+}
+
+/**
+ * Replaces a BIC with a random one that still matches the ISO 9362 pattern.
+ * The country code (positions 5-6) is kept, because a random pair of letters
+ * is usually not a valid ISO 3166 code and validators check it against the
+ * country list. Length (8 or 11) is preserved.
+ */
+export function anonymizeBic(value: string): string {
+  const bic = value.replace(/\s+/g, '').toUpperCase();
+  const country = bic.slice(4, 6);
+
+  const bank = Array.from({ length: 4 }, randomLetter).join('');
+  const location = randomFrom('ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789') + randomFrom('ABCDEFGHIJKLMNPQRSTUVWXYZ0123456789');
+  const branch = bic.length === 11 ? Array.from({ length: 3 }, () => randomFrom(LETTERS + DIGITS)).join('') : '';
+
+  return bank + country + location + branch;
 }
 
 /* ---------------------------------------------------------------- VAT ID */
