@@ -15,6 +15,8 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+import { anonymizeIban, isValidIban, looksLikeIban, anonymizeVatId, isSupportedVatId } from './checksums';
+
 const WHITELIST_SUFFIXES = ['code', 'date', 'time', 'amount', 'percent', 'tax', 'currency', 'indicator'];
 const BLACKLIST_SUFFIXES = ['name', 'street', 'city', 'lineone', 'linetwo', 'person', 'contact', 'telephone', 'telefax', 'mail', 'note', 'description', 'content'];
 const FORCED_TAGS = new Set(['ibanid', 'postcodecode', 'globalid', 'completenumber', 'uriid', 'id', 'sellerassignedid']);
@@ -38,6 +40,30 @@ export function anonymizeXmlDoc(xmlDoc: Document): void {
       else result += c;
     }
     return result;
+  };
+
+  // Tags that hold an IBAN even when the value's check digits are already broken.
+  const isIbanContext = (el: Element): boolean => {
+    const tag = el.localName.toLowerCase();
+    const parent = el.parentElement?.localName.toLowerCase() || '';
+    return tag === 'ibanid' || parent.endsWith('financialaccount');
+  };
+
+  /**
+   * Anonymizes a single value. Identifiers carrying a check digit (IBAN, VAT ID)
+   * are regenerated with a valid checksum instead of being scrambled, so that
+   * validators do not reject the anonymized invoice.
+   */
+  const anonymizeValue = (text: string, el: Element): string => {
+    const value = text.trim();
+    if (!value) return text;
+
+    let replacement: string | null = null;
+    if (isSupportedVatId(value)) replacement = anonymizeVatId(value);
+    else if (looksLikeIban(value) && (isValidIban(value) || isIbanContext(el))) replacement = anonymizeIban(value);
+
+    if (replacement === null) return anonymizeText(text);
+    return text.replace(value, replacement); // keep surrounding whitespace
   };
 
   const shouldAnonymize = (el: Element): boolean => {
@@ -74,7 +100,7 @@ export function anonymizeXmlDoc(xmlDoc: Document): void {
         for (let i = 0; i < el.childNodes.length; i++) {
           const child = el.childNodes[i];
           if (child.nodeType === Node.TEXT_NODE) {
-            child.textContent = anonymizeText(child.textContent || '');
+            child.textContent = anonymizeValue(child.textContent || '', el);
           }
         }
       }

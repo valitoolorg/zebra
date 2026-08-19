@@ -28,6 +28,7 @@ let originalDoc: Document | null = null;
 let anonymizedDoc: Document | null = null;
 let isAnonView = true;
 let fileName = 'anonymized.xml';
+let xmlDeclaration = '';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 
@@ -74,6 +75,20 @@ function showErrorMessage(key: string) {
   overlay.querySelector('#errorCloseBtn')?.addEventListener('click', () => overlay.remove());
 }
 
+/**
+ * Returns the source document's XML declaration, or '' if it had none.
+ * The DOMParser drops the prolog and the XMLSerializer never writes one, so it
+ * has to be carried over manually to survive the round trip.
+ *
+ * The encoding pseudo-attribute is normalized to UTF-8 because the download is
+ * always written as UTF-8 — keeping a stale "ISO-8859-1" would mislabel it.
+ */
+function extractXmlDeclaration(xmlText: string): string {
+  const match = xmlText.match(/^\s*<\?xml\s[^?]*\?>/);
+  if (!match) return '';
+  return match[0].trim().replace(/encoding\s*=\s*(["'])[^"']*\1/i, 'encoding="UTF-8"');
+}
+
 async function handleFile(file: File) {
   let xmlText = '';
   const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
@@ -89,6 +104,8 @@ async function handleFile(file: File) {
     } else {
       return showErrorMessage('error.invalid_file');
     }
+
+    xmlDeclaration = extractXmlDeclaration(xmlText);
 
     const parser = new DOMParser();
     originalDoc = parser.parseFromString(xmlText, 'text/xml');
@@ -186,7 +203,7 @@ function attachDropzoneEvents() {
 }
 
 function attachViewerEvents() {
-  document.getElementById('backBtn')?.addEventListener('click', () => { originalDoc = null; render(); });
+  document.getElementById('backBtn')?.addEventListener('click', () => { originalDoc = null; xmlDeclaration = ''; render(); });
   document.getElementById('anonToggle')?.addEventListener('click', () => { isAnonView = true; render(); });
   document.getElementById('origToggle')?.addEventListener('click', () => { isAnonView = false; render(); });
   document.getElementById('downloadBtn')?.addEventListener('click', downloadFile);
@@ -249,7 +266,8 @@ function formatXml(doc: Document): DocumentFragment {
 
 function downloadFile() {
   if (!anonymizedDoc) return;
-  const xml = new XMLSerializer().serializeToString(anonymizedDoc);
+  const body = new XMLSerializer().serializeToString(anonymizedDoc);
+  const xml = xmlDeclaration ? `${xmlDeclaration}\n${body}` : body;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([xml], { type: 'text/xml' }));
   a.download = fileName.replace('.xml', '_anonymized.xml');
