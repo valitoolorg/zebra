@@ -15,6 +15,14 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+/**
+ * Shape of one PDF attachment. Declared locally rather than imported, because
+ * pdf.js changed both the container and this type across 6.x: up to 6.0 the
+ * attachments came back as a plain object with a required `content`, from 6.1
+ * on as a Map whose `content` is optional.
+ */
+type Attachment = { content?: Uint8Array | null };
+
 export async function extractXmlFromPdf(pdfBuffer: ArrayBuffer): Promise<string> {
   const pdfjs = await import('pdfjs-dist');
   
@@ -30,11 +38,15 @@ export async function extractXmlFromPdf(pdfBuffer: ArrayBuffer): Promise<string>
     
     if (!attachments) throw new Error('NO_ATTACHMENTS');
 
+    // Works with both container types pdf.js has used across 6.x (see Attachment).
+    const source = attachments as unknown;
+    const lookup = (name: string): Attachment | undefined =>
+      source instanceof Map ? source.get(name) : (source as Record<string, Attachment>)[name];
+
     const RELEVANT = ['factur-x.xml', 'zugferd-invoice.xml', 'xrechnung.xml', 'basic-wl.xml'];
     for (const name of RELEVANT) {
-      if (attachments[name]) {
-        return new TextDecoder().decode(attachments[name].content);
-      }
+      const content = lookup(name)?.content;
+      if (content) return new TextDecoder().decode(content);
     }
 
     throw new Error('NO_ZUGFERD_XML');
