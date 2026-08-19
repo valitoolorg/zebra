@@ -35,7 +35,10 @@
   --border: 214.3 31.8% 91.4%;
   --input: 214.3 31.8% 91.4%;
   --ring: 85 36% 49%;
-  --changed: 32 95% 38%;
+  --changed: 25 90% 28%;
+  /* Darker than --primary: the brand green only reaches 2.7:1 on white, which
+     is unreadable for a wall of monospace values. This one sits at 5.2:1. */
+  --xml-value: 85 45% 32%;
   --radius: 0.5rem;
 }
 
@@ -60,6 +63,7 @@
   --input: 217.2 32.6% 17.5%;
   --ring: 224.3 76.3% 48%;
   --changed: 38 95% 60%;
+  --xml-value: 85 36% 49%;
 }
 
 * {
@@ -214,7 +218,7 @@ button.ghost {
 }
 
 .xml-value {
-  color: hsl(var(--primary));
+  color: hsl(var(--xml-value));
   font-weight: 600;
 }
 
