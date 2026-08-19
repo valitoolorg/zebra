@@ -108,7 +108,16 @@ async function handleFile(file: File) {
     xmlDeclaration = extractXmlDeclaration(xmlText);
 
     const parser = new DOMParser();
-    originalDoc = parser.parseFromString(xmlText, 'text/xml');
+    const parsed = parser.parseFromString(xmlText, 'text/xml');
+
+    // DOMParser does not throw on malformed XML — it returns a document whose
+    // root is <parsererror>. Without this check that error document would be
+    // displayed, and even offered for download, as if it were an invoice.
+    if (parsed.getElementsByTagName('parsererror').length > 0 || !parsed.documentElement) {
+      return showErrorMessage('error.malformed_xml');
+    }
+
+    originalDoc = parsed;
     anonymizedDoc = originalDoc.cloneNode(true) as Document;
     anonymizeXmlDoc(anonymizedDoc);
     

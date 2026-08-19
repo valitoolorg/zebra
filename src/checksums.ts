@@ -18,25 +18,24 @@
 /*
  * Format-preserving anonymization for structured identifiers.
  *
- * Plain random replacement destroys check digits and format constraints, which
- * makes downstream validators (Mustang, KoSIT, VeR) reject the anonymized
- * invoice with errors like "IBAN is invalid". The helpers below produce random
- * values that still satisfy the published rules — check digits for IBAN and
- * VAT IDs, and the ISO 9362 character pattern for BICs.
+ * The guiding rule is "preserve validity, never establish it": an identifier is
+ * only replaced by a rule-conforming one when the *original* already conformed.
+ * A broken IBAN stays broken (just anonymized), because ZEBRA is used to prepare
+ * faulty invoices for analysis — silently repairing a value would delete the very
+ * defect someone is trying to diagnose.
  */
 
 const DIGITS = '0123456789';
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 const randomFrom = (chars: string): string => chars[Math.floor(Math.random() * chars.length)];
-const randomDigit = (): string => DIGITS[Math.floor(Math.random() * 10)];
-const randomLetter = (): string => LETTERS[Math.floor(Math.random() * 26)];
+const randomDigit = (): string => randomFrom(DIGITS);
+const randomLetter = (): string => randomFrom(LETTERS);
 const randomDigits = (n: number): string => Array.from({ length: n }, randomDigit).join('');
 
 /* ------------------------------------------------------------------ IBAN */
 
-// ISO 13616 registry lengths. Used to normalize the generated IBAN so that
-// length checks pass even when the source value had a wrong length.
+// ISO 13616 registry lengths, needed to validate the source value.
 const IBAN_LENGTHS: Record<string, number> = {
   AL: 28, AD: 24, AT: 20, AZ: 28, BH: 22, BY: 28, BE: 16, BA: 20, BR: 29,
   BG: 22, BI: 27, CR: 22, HR: 21, CY: 28, CZ: 24, DK: 18, DJ: 27, DO: 28,
@@ -60,45 +59,30 @@ const mod97 = (value: string): number => {
   return remainder;
 };
 
-const stripIban = (value: string): string => value.replace(/\s+/g, '').toUpperCase();
+const normalize = (value: string): string => value.replace(/\s+/g, '').toUpperCase();
 
-/** True if `value` passes the ISO 13616 MOD 97-10 check. */
+/** True if `value` is a well-formed IBAN with correct length and check digits. */
 export function isValidIban(value: string): boolean {
-  const iban = stripIban(value);
+  const iban = normalize(value);
   if (!/^[A-Z]{2}[0-9]{2}[A-Z0-9]{10,30}$/.test(iban)) return false;
-  const expected = IBAN_LENGTHS[iban.slice(0, 2)];
-  if (expected !== undefined && iban.length !== expected) return false;
+  if (iban.length !== IBAN_LENGTHS[iban.slice(0, 2)]) return false;
   return mod97(iban.slice(4) + iban.slice(0, 4)) === 1;
 }
 
-/** True if `value` is shaped like an IBAN, regardless of its check digits. */
-export function looksLikeIban(value: string): boolean {
-  return /^[A-Z]{2}[0-9]{2}[A-Z0-9]{10,30}$/.test(stripIban(value));
-}
-
 /**
- * Replaces the BBAN with random characters of the same kind (digit for digit,
- * letter for letter) and recomputes the two check digits, so the result passes
- * MOD 97-10. The country code and the original spacing style are preserved.
+ * Replaces the BBAN with random characters of the same kind and recomputes the
+ * check digits. Only meaningful for input that already passed `isValidIban`,
+ * so country and length are simply carried over.
  *
- * Note: national check digits *inside* the BBAN (FR, IT, ES, BE, MC, ...) are
- * not recomputed — there is no single published algorithm for those, and the
- * common e-invoice validators only verify the ISO 13616 check digits.
+ * National check digits *inside* the BBAN (FR, IT, ES, BE, MC, ...) are not
+ * recomputed — there is no single published algorithm, and the common e-invoice
+ * validators only verify the ISO 13616 check digits.
  */
 export function anonymizeIban(value: string): string {
-  const iban = stripIban(value);
+  const iban = normalize(value);
   const country = iban.slice(0, 2);
-  const target = IBAN_LENGTHS[country] ?? iban.length;
 
-  const source = iban.slice(4);
-  let bban = '';
-  for (let i = 0; i < target - 4; i++) {
-    const c = source[i];
-    if (c === undefined) bban += randomDigit();
-    else if (c >= 'A' && c <= 'Z') bban += randomLetter();
-    else bban += randomDigit();
-  }
-
+  const bban = Array.from(iban.slice(4), c => (c >= 'A' && c <= 'Z' ? randomLetter() : randomDigit())).join('');
   const check = String(98 - mod97(bban + country + '00')).padStart(2, '0');
   const result = country + check + bban;
 
@@ -109,178 +93,185 @@ export function anonymizeIban(value: string): string {
 /* ------------------------------------------------------------------- BIC */
 
 /*
- * ISO 9362 / ISO 20022 pattern: [A-Z]{6}[A-Z2-9][A-NP-Z0-9]([A-Z0-9]{3})?
- * Positions 1-4 bank code, 5-6 ISO 3166 country, 7-8 location, 9-11 optional
- * branch. Note the exclusions: position 7 rejects 0 and 1, position 8 rejects O.
+ * ISO 9362 / ISO 20022 pattern. Positions 1-4 bank code, 5-6 ISO 3166 country,
+ * 7-8 location, 9-11 optional branch. Note the exclusions: position 7 rejects
+ * 0 and 1, position 8 rejects O.
  */
 const BIC_PATTERN = /^[A-Z]{6}[A-Z2-9][A-NP-Z0-9]([A-Z0-9]{3})?$/;
 
 /** True if `value` matches the ISO 9362 BIC pattern. */
-export function looksLikeBic(value: string): boolean {
-  return BIC_PATTERN.test(value.replace(/\s+/g, '').toUpperCase());
+export function isValidBic(value: string): boolean {
+  return BIC_PATTERN.test(normalize(value));
 }
 
 /**
- * Replaces a BIC with a random one that still matches the ISO 9362 pattern.
- * The country code (positions 5-6) is kept, because a random pair of letters
- * is usually not a valid ISO 3166 code and validators check it against the
- * country list. Length (8 or 11) is preserved.
+ * Replaces a BIC with a random one matching the same pattern. The country code
+ * is kept, because a random letter pair is rarely a valid ISO 3166 code.
  */
 export function anonymizeBic(value: string): string {
-  const bic = value.replace(/\s+/g, '').toUpperCase();
-  const country = bic.slice(4, 6);
-
+  const bic = normalize(value);
   const bank = Array.from({ length: 4 }, randomLetter).join('');
-  const location = randomFrom('ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789') + randomFrom('ABCDEFGHIJKLMNPQRSTUVWXYZ0123456789');
+  const location = randomFrom(LETTERS + '23456789') + randomFrom('ABCDEFGHIJKLMNPQRSTUVWXYZ' + DIGITS);
   const branch = bic.length === 11 ? Array.from({ length: 3 }, () => randomFrom(LETTERS + DIGITS)).join('') : '';
 
-  return bank + country + location + branch;
+  return bank + bic.slice(4, 6) + location + branch;
 }
 
 /* ---------------------------------------------------------------- VAT ID */
 
 /*
- * There is no EU-wide VAT check-digit algorithm — every member state defines
- * its own rule. Only the countries whose rule is published and unambiguous are
- * handled here; everything else falls back to plain random anonymization.
+ * There is no EU-wide VAT check-digit algorithm — every member state defines its
+ * own rule. Only countries with a published, unambiguous rule are handled here;
+ * anything else falls back to plain scrambling. Spain is deliberately omitted:
+ * NIF/CIF/NIE use three competing schemes with letter check characters.
+ *
+ * Each rule is expressed as a body (everything except the check characters) plus
+ * a function computing those characters, which yields validation and generation
+ * from the same definition — so the two can never drift apart.
  */
 
 const luhnDouble = (d: number): number => Math.floor(d / 5) + (d * 2) % 10;
 const toDigits = (s: string): number[] => s.split('').map(Number);
+const weighted = (s: string, weights: number[]): number =>
+  toDigits(s).reduce((acc, d, i) => acc + d * weights[i], 0);
 
 type VatRule = {
-  /** Matches the part after the two-letter country prefix. */
+  /** Matches the national number, i.e. the part after the country prefix. */
   pattern: RegExp;
-  /** Builds a random national number with a correct check digit. */
-  generate: () => string;
+  /** Index at which the check characters sit inside the national number. */
+  checkAt: number;
+  /** Number of check characters. */
+  checkLength: number;
+  /** Builds a random body (national number without its check characters). */
+  randomBody: () => string;
+  /** Check characters for a body, or null when the body admits none. */
+  check: (body: string) => string | null;
 };
 
 const VAT_RULES: Record<string, VatRule> = {
   // ISO 7064 MOD 11,10 over the first 8 digits.
   DE: {
-    pattern: /^[0-9]{9}$/,
-    generate: () => {
-      const body = randomDigits(8);
+    pattern: /^[0-9]{9}$/, checkAt: 8, checkLength: 1,
+    randomBody: () => randomDigits(8),
+    check: body => {
       let p = 10;
-      for (const d of toDigits(body)) {
-        const m = (d + p) % 10 || 10;
-        p = (2 * m) % 11;
-      }
-      const check = 11 - p;
-      return body + (check === 10 ? 0 : check);
+      for (const d of toDigits(body)) p = (2 * ((d + p) % 10 || 10)) % 11;
+      return String(11 - p === 10 ? 0 : 11 - p);
     },
   },
 
-  // "U" + 8 characters; alternating weights over the first 7 digits.
+  // "U" + 8 digits; alternating weights over the 7 digits before the check digit.
   AT: {
-    pattern: /^U[0-9]{8}$/,
-    generate: () => {
-      const body = randomDigits(7);
-      const d = toDigits(body);
+    pattern: /^U[0-9]{8}$/, checkAt: 8, checkLength: 1,
+    randomBody: () => 'U' + randomDigits(7),
+    check: body => {
+      const d = toDigits(body.slice(1));
       const sum = d[0] + luhnDouble(d[1]) + d[2] + luhnDouble(d[3]) + d[4] + luhnDouble(d[5]) + d[6];
-      return 'U' + body + ((96 - sum) % 10 + 10) % 10;
+      return String((((96 - sum) % 10) + 10) % 10);
     },
   },
 
-  // 9 digits + "B" + 2-digit sub-number; weights 9..2, check digit = sum mod 11.
+  // 9 digits + "B" + 2-digit sub-number; weights 9..2 over the first 8 digits.
   NL: {
-    pattern: /^[0-9]{9}B[0-9]{2}$/,
-    generate: () => {
-      for (;;) {
-        const body = randomDigits(8);
-        const sum = toDigits(body).reduce((acc, d, i) => acc + d * (9 - i), 0);
-        const check = sum % 11;
-        if (check === 10) continue; // not a valid check digit — retry
-        return `${body}${check}B${randomDigits(2).replace(/^00$/, '01')}`;
-      }
+    pattern: /^[0-9]{9}B[0-9]{2}$/, checkAt: 8, checkLength: 1,
+    randomBody: () => randomDigits(8) + 'B' + randomDigits(2),
+    check: body => {
+      const rest = weighted(body.slice(0, 8), [9, 8, 7, 6, 5, 4, 3, 2]) % 11;
+      return rest === 10 ? null : String(rest);
     },
   },
 
   // 10 digits: first 8 as a number, check = 97 - (n mod 97).
   BE: {
-    pattern: /^[0-9]{10}$/,
-    generate: () => {
-      const body = randomDigits(1).replace(/[2-9]/, '0') + randomDigits(7);
-      const check = 97 - (Number(body) % 97);
-      return body + String(check).padStart(2, '0');
-    },
+    pattern: /^[0-9]{10}$/, checkAt: 8, checkLength: 2,
+    randomBody: () => randomFrom('01') + randomDigits(7),
+    check: body => String(97 - (Number(body) % 97)).padStart(2, '0'),
   },
 
-  // 2 check digits + 9-digit SIREN; key = (12 + 3 * (SIREN mod 97)) mod 97.
+  // 2 check digits followed by a 9-digit SIREN; key = (12 + 3 * (SIREN mod 97)) mod 97.
   FR: {
-    pattern: /^[0-9A-Z]{2}[0-9]{9}$/,
-    generate: () => {
-      const siren = randomDigits(9);
-      const key = (12 + 3 * (Number(siren) % 97)) % 97;
-      return String(key).padStart(2, '0') + siren;
-    },
+    pattern: /^[0-9]{11}$/, checkAt: 0, checkLength: 2,
+    randomBody: () => randomDigits(9),
+    check: body => String((12 + 3 * (Number(body) % 97)) % 97).padStart(2, '0'),
   },
 
   // 11 digits, Luhn over the first 10.
   IT: {
-    pattern: /^[0-9]{11}$/,
-    generate: () => {
-      const body = randomDigits(10);
+    pattern: /^[0-9]{11}$/, checkAt: 10, checkLength: 1,
+    randomBody: () => randomDigits(10),
+    check: body => {
       const sum = toDigits(body).reduce((acc, d, i) => acc + (i % 2 === 0 ? d : luhnDouble(d)), 0);
-      return body + (10 - sum % 10) % 10;
+      return String((10 - sum % 10) % 10);
     },
   },
 
   // 8 digits, last two = first six mod 89.
   LU: {
-    pattern: /^[0-9]{8}$/,
-    generate: () => {
-      const body = randomDigits(6);
-      return body + String(Number(body) % 89).padStart(2, '0');
-    },
+    pattern: /^[0-9]{8}$/, checkAt: 6, checkLength: 2,
+    randomBody: () => randomDigits(6),
+    check: body => String(Number(body) % 89).padStart(2, '0'),
   },
 
   // 8 digits, weights 2,7,6,5,4,3,2,1 — weighted sum must be 0 mod 11.
   DK: {
-    pattern: /^[0-9]{8}$/,
-    generate: () => {
-      const weights = [2, 7, 6, 5, 4, 3, 2];
-      for (;;) {
-        const body = randomDigits(7);
-        const sum = toDigits(body).reduce((acc, d, i) => acc + d * weights[i], 0);
-        const check = (11 - sum % 11) % 11;
-        if (check === 10) continue; // no digit satisfies the rule — retry
-        return body + check;
-      }
+    pattern: /^[0-9]{8}$/, checkAt: 7, checkLength: 1,
+    randomBody: () => randomDigits(7),
+    check: body => {
+      const rest = (11 - weighted(body, [2, 7, 6, 5, 4, 3, 2]) % 11) % 11;
+      return rest === 10 ? null : String(rest);
     },
   },
 
-  // 10 digits, weights 6,5,7,2,3,4,5,6,7 — check digit = sum mod 11.
+  // 10 digits, weights 6,5,7,2,3,4,5,6,7 over the first 9.
   PL: {
-    pattern: /^[0-9]{10}$/,
-    generate: () => {
-      const weights = [6, 5, 7, 2, 3, 4, 5, 6, 7];
-      for (;;) {
-        const body = randomDigits(9);
-        const sum = toDigits(body).reduce((acc, d, i) => acc + d * weights[i], 0);
-        const check = sum % 11;
-        if (check === 10) continue; // not a valid check digit — retry
-        return body + check;
-      }
+    pattern: /^[0-9]{10}$/, checkAt: 9, checkLength: 1,
+    randomBody: () => randomDigits(9),
+    check: body => {
+      const rest = weighted(body, [6, 5, 7, 2, 3, 4, 5, 6, 7]) % 11;
+      return rest === 10 ? null : String(rest);
     },
   },
 };
 
 const stripVat = (value: string): string => value.replace(/[\s.-]/g, '').toUpperCase();
 
-/** True if `value` is a VAT ID whose check-digit rule this module implements. */
-export function isSupportedVatId(value: string): boolean {
+/** Inserts the computed check characters into a body, yielding a full number. */
+const compose = (rule: VatRule, body: string): string | null => {
+  const check = rule.check(body);
+  return check === null ? null : body.slice(0, rule.checkAt) + check + body.slice(rule.checkAt);
+};
+
+/** True if `value` is a VAT ID whose country rule this module implements. */
+export function isKnownVatCountry(value: string): boolean {
   const vat = stripVat(value);
   const rule = VAT_RULES[vat.slice(0, 2)];
   return rule !== undefined && rule.pattern.test(vat.slice(2));
 }
 
+/** True if `value` is a VAT ID with a correct check digit. */
+export function isValidVatId(value: string): boolean {
+  const vat = stripVat(value);
+  const rule = VAT_RULES[vat.slice(0, 2)];
+  if (!rule) return false;
+
+  const national = vat.slice(2);
+  if (!rule.pattern.test(national)) return false;
+
+  const body = national.slice(0, rule.checkAt) + national.slice(rule.checkAt + rule.checkLength);
+  return compose(rule, body) === national;
+}
+
 /**
  * Returns a random VAT ID for the same country with a valid check digit.
- * The country prefix is kept — without it the check digit is undefined.
+ * The country prefix is kept — without it no check digit is defined.
  */
 export function anonymizeVatId(value: string): string {
-  const vat = stripVat(value);
-  const country = vat.slice(0, 2);
-  return country + VAT_RULES[country].generate();
+  const country = stripVat(value).slice(0, 2);
+  const rule = VAT_RULES[country];
+
+  // A few rules reject some bodies (no digit satisfies them); retry in that case.
+  for (;;) {
+    const national = compose(rule, rule.randomBody());
+    if (national !== null) return country + national;
+  }
 }

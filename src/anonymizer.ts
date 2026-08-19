@@ -15,115 +15,183 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { anonymizeIban, isValidIban, looksLikeIban, anonymizeBic, looksLikeBic, anonymizeVatId, isSupportedVatId } from './checksums';
+import {
+  anonymizeIban, isValidIban,
+  anonymizeBic, isValidBic,
+  anonymizeVatId, isValidVatId,
+} from './checksums';
 
-const WHITELIST_SUFFIXES = ['code', 'date', 'time', 'amount', 'percent', 'tax', 'currency', 'indicator'];
-const BLACKLIST_SUFFIXES = ['name', 'street', 'city', 'lineone', 'linetwo', 'person', 'contact', 'telephone', 'telefax', 'mail', 'note', 'description', 'content'];
-const FORCED_TAGS = new Set(['ibanid', 'bicid', 'companyid', 'postcodecode', 'globalid', 'completenumber', 'uriid', 'id', 'sellerassignedid']);
+/*
+ * Everything is anonymized unless it is explicitly known to be technical.
+ *
+ * The reverse — anonymizing only what is recognized — leaves unknown elements
+ * readable, and unknown elements are exactly what faulty invoices are full of:
+ * vendor extensions, misplaced fields, misspelled tags. Defaulting to "replace"
+ * means a tag nobody anticipated ends up scrambled rather than leaked.
+ */
 
-const LOWER_CHARS = "abcdefghijklmnopqrstuvwxyzäöüß";
-const UPPER_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ";
-const DIGIT_CHARS = "0123456789";
+/** Element name suffixes whose content is technical and must survive. */
+const KEEP_SUFFIXES = [
+  'code', 'date', 'time', 'datetimestring',
+  'amount', 'percent', 'quantity', 'rate', 'numeric', 'measure',
+  'currencyid', 'countryid', 'lineid', 'unitcode',
+  'indicator', 'versionid', 'customizationid', 'profileid',
+];
+
+/** Overrides KEEP_SUFFIXES: a postcode ends in "code" but identifies people. */
+const FORCE_SUFFIXES = ['postcodecode', 'postcode'];
+
+/** Technical values reachable only via their parent: "<tag> inside <parent>". */
+const KEEP_IN_PARENT: Record<string, (parent: string) => boolean> = {
+  id: parent =>
+    parent === 'guidelinespecifieddocumentcontextparameter' || // CII profile ID
+    parent === 'taxscheme' ||                                  // UBL: carries "VAT"
+    parent.endsWith('taxcategory') ||                          // UBL: "S", "Z", "E", ...
+    parent.endsWith('invoiceline') ||                          // UBL: line number
+    parent.endsWith('creditnoteline'),
+  name: parent => parent === 'exchangeddocument',              // document type, e.g. "INVOICE"
+};
+
+/** Attributes that are technical metadata rather than business content. */
+const KEEP_ATTRIBUTES = new Set([
+  'schemeid', 'schemeagencyid', 'schemeagencyname', 'schemeuri', 'schemeversionid',
+  'listid', 'listagencyid', 'listagencyname', 'listuri', 'listversionid',
+  'currencyid', 'unitcode', 'unitcodelistversionid', 'format', 'mimecode',
+  'languageid', 'languagelocaleid',
+]);
+
+const ATTACHMENT_TAGS = new Set(['attachmentbinaryobject', 'embeddeddocumentbinaryobject']);
+
+/*
+ * Character classes are replaced within themselves: ASCII stays ASCII, an umlaut
+ * stays an umlaut. Mixing them would introduce non-ASCII where the source had
+ * none, which breaks e-mail addresses, URLs and anything else validated against
+ * an ASCII pattern.
+ */
+const CHAR_CLASSES = [
+  'abcdefghijklmnopqrstuvwxyz',
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  'äöüß',
+  'ÄÖÜ',
+  '0123456789',
+];
+
+const EMAIL_PATTERN = /^([^@\s]+)@([^@\s]+)\.([A-Za-z]{2,})$/;
+const URL_PATTERN = /^(https?:\/\/)(\S+)$/i;
 
 export function anonymizeXmlDoc(xmlDoc: Document): void {
-  const getRandomChar = (chars: string): string => {
-    return chars[Math.floor(Math.random() * chars.length)];
-  };
+  /*
+   * Same input always yields the same replacement, so relationships between
+   * fields survive. Validators report things like "seller name in BT-27 does not
+   * match BG-4"; with per-occurrence randomness that finding would be impossible
+   * to reproduce on the anonymized file.
+   */
+  const pseudonyms = new Map<string, string>();
 
-  const anonymizeText = (text: string): string => {
+  const randomChar = (chars: string): string => chars[Math.floor(Math.random() * chars.length)];
+
+  /** Replaces characters class by class, so length and punctuation survive. */
+  const scramble = (text: string): string => {
     let result = '';
-    for (let i = 0; i < text.length; i++) {
-      const c = text[i];
-      if (LOWER_CHARS.includes(c)) result += getRandomChar(LOWER_CHARS);
-      else if (UPPER_CHARS.includes(c)) result += getRandomChar(UPPER_CHARS);
-      else if (DIGIT_CHARS.includes(c)) result += getRandomChar(DIGIT_CHARS);
-      else result += c;
+    for (const c of text) {
+      const charClass = CHAR_CLASSES.find(cls => cls.includes(c));
+      result += charClass ? randomChar(charClass) : c;
     }
     return result;
   };
 
-  // Tags that hold an IBAN even when the value's check digits are already broken.
-  const isIbanContext = (el: Element): boolean => {
-    const tag = el.localName.toLowerCase();
-    const parent = el.parentElement?.localName.toLowerCase() || '';
-    return tag === 'ibanid' || parent.endsWith('financialaccount');
-  };
-
-  // Tags that hold a BIC. Matched by context rather than by value, because a
-  // plain 8-letter word (a company name, say) also matches the BIC pattern.
-  const isBicContext = (el: Element): boolean => {
-    const tag = el.localName.toLowerCase();
-    const parent = el.parentElement?.localName.toLowerCase() || '';
-    return tag === 'bicid' || parent.endsWith('financialinstitution') || parent.endsWith('financialinstitutionbranch');
-  };
+  const isBicContext = (tag: string, parent: string): boolean =>
+    tag === 'bicid' || parent.endsWith('financialinstitution') || parent.endsWith('financialinstitutionbranch');
 
   /**
-   * Anonymizes a single value. Structured identifiers (IBAN, VAT ID, BIC) are
-   * regenerated so they keep a valid check digit or format, instead of being
-   * scrambled into something validators reject.
+   * Picks a replacement strategy for one value.
+   *
+   * Identifiers are only regenerated in rule-conforming form when the original
+   * already conformed. An invalid IBAN is scrambled like any other string and
+   * stays invalid — repairing it would erase the defect under analysis.
    */
-  const anonymizeValue = (text: string, el: Element): string => {
+  const replacementFor = (value: string, tag: string, parent: string): string => {
+    if (isValidIban(value)) return anonymizeIban(value);
+    if (isValidVatId(value)) return anonymizeVatId(value);
+    if (isBicContext(tag, parent) && isValidBic(value)) return anonymizeBic(value);
+
+    // Keep an address parseable: local part and domain change, the TLD stays.
+    const email = value.match(EMAIL_PATTERN);
+    if (email) return `${scramble(email[1])}@${scramble(email[2])}.${email[3]}`;
+
+    const url = value.match(URL_PATTERN);
+    if (url) return url[1] + scramble(url[2]);
+
+    return scramble(value);
+  };
+
+  const anonymizeValue = (text: string, tag: string, parent: string): string => {
     const value = text.trim();
     if (!value) return text;
 
-    let replacement: string | null = null;
-    if (isSupportedVatId(value)) replacement = anonymizeVatId(value);
-    else if (looksLikeIban(value) && (isValidIban(value) || isIbanContext(el))) replacement = anonymizeIban(value);
-    else if (isBicContext(el) && looksLikeBic(value)) replacement = anonymizeBic(value);
+    const key = `${isBicContext(tag, parent) ? 'bic' : ''}:${value}`;
+    let replacement = pseudonyms.get(key);
+    if (replacement === undefined) {
+      replacement = replacementFor(value, tag, parent);
+      pseudonyms.set(key, replacement);
+    }
 
-    if (replacement === null) return anonymizeText(text);
     return text.replace(value, replacement); // keep surrounding whitespace
   };
 
-  const shouldAnonymize = (el: Element): boolean => {
-    const tag = el.localName.toLowerCase();
-
-    const parent = el.parentElement?.localName.toLowerCase() || '';
-
-    // Preserve technical metadata like Profile/Guideline ID and Document Name (e.g. "INVOICE")
-    if (tag === 'id' && parent === 'guidelinespecifieddocumentcontextparameter') return false;
-    if (tag === 'name' && parent === 'exchangeddocument') return false;
-
-    // UBL code list identifiers, not business data: TaxScheme/ID carries "VAT",
-    // TaxCategory/ID carries the category code ("S", "Z", "E", ...). Scrambling
-    // them makes the invoice fail EN 16931 validation.
-    if (tag === 'id' && (parent === 'taxscheme' || parent.endsWith('taxcategory'))) return false;
-
-    if (FORCED_TAGS.has(tag)) return true;
-
-    if (WHITELIST_SUFFIXES.some(s => tag.endsWith(s))) return false;
-    if (BLACKLIST_SUFFIXES.some(s => tag.endsWith(s))) return true;
-    return false;
+  /** True if the element's content is technical and must be left alone. */
+  const shouldKeep = (tag: string, parent: string): boolean => {
+    if (FORCE_SUFFIXES.some(s => tag.endsWith(s))) return false;
+    if (KEEP_IN_PARENT[tag]?.(parent)) return true;
+    return KEEP_SUFFIXES.some(s => tag.endsWith(s));
   };
 
-  const ATTACHMENT_TAGS = new Set(['attachmentbinaryobject', 'embeddeddocumentbinaryobject']);
-
-  const walk = (node: Node): void => {
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      const el = node as Element;
-      const tag = el.localName.toLowerCase();
-
-      if (ATTACHMENT_TAGS.has(tag)) {
-        for (let i = 0; i < el.childNodes.length; i++) {
-          const child = el.childNodes[i];
-          if (child.nodeType === Node.TEXT_NODE) {
-            child.textContent = 'RHVtbXktQW5oYW5n'; // "Dummy-Anhang" in base64
-          }
-        }
-      } else if (shouldAnonymize(el)) {
-        for (let i = 0; i < el.childNodes.length; i++) {
-          const child = el.childNodes[i];
-          if (child.nodeType === Node.TEXT_NODE) {
-            child.textContent = anonymizeValue(child.textContent || '', el);
-          }
-        }
-      }
-
-      for (let i = 0; i < el.childNodes.length; i++) {
-        walk(el.childNodes[i]);
-      }
+  const anonymizeAttributes = (el: Element, parent: string): void => {
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase();
+      // Namespace and schema declarations are structure, never content.
+      if (name === 'xmlns' || name.startsWith('xmlns:') || name.startsWith('xsi:')) continue;
+      if (KEEP_ATTRIBUTES.has(name.replace(/^.*:/, ''))) continue;
+      attr.value = anonymizeValue(attr.value, name, parent);
     }
   };
 
+  /** Comments routinely carry export paths, clerk names and internal notes. */
+  const stripComments = (node: Node): void => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === Node.COMMENT_NODE) node.removeChild(child);
+      else stripComments(child);
+    }
+  };
+
+  const isTextual = (node: Node): boolean =>
+    node.nodeType === Node.TEXT_NODE || node.nodeType === Node.CDATA_SECTION_NODE;
+
+  const walk = (node: Node): void => {
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+    const el = node as Element;
+    const tag = el.localName.toLowerCase();
+    const parent = el.parentElement?.localName.toLowerCase() || '';
+
+    anonymizeAttributes(el, parent);
+
+    if (ATTACHMENT_TAGS.has(tag)) {
+      // CDATA counts as text here — attachment payloads are often wrapped in it.
+      for (const child of Array.from(el.childNodes)) {
+        if (isTextual(child)) child.textContent = 'RHVtbXktQW5oYW5n'; // "Dummy-Anhang" in base64
+      }
+    } else if (!shouldKeep(tag, parent)) {
+      for (const child of Array.from(el.childNodes)) {
+        if (isTextual(child)) child.textContent = anonymizeValue(child.textContent || '', tag, parent);
+      }
+    }
+
+    for (const child of Array.from(el.childNodes)) walk(child);
+  };
+
+  if (!xmlDoc.documentElement) return;
+
+  stripComments(xmlDoc);
   walk(xmlDoc.documentElement);
 }
