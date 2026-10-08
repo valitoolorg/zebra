@@ -19,9 +19,11 @@
  * Shape of one PDF attachment. Declared locally rather than imported, because
  * pdf.js changed both the container and this type across 6.x: up to 6.0 the
  * attachments came back as a plain object with a required `content`, from 6.1
- * on as a Map whose `content` is optional.
+ * on as a Map whose `content` is optional. From 6.2 on it is usually missing
+ * and has to be fetched with `getAttachmentContent`, which older versions lack.
  */
 type Attachment = { content?: Uint8Array | null };
+type LazyContent = { getAttachmentContent?: (id: string) => Promise<Uint8Array | null> };
 
 export async function extractXmlFromPdf(pdfBuffer: ArrayBuffer): Promise<string> {
   const pdfjs = await import('pdfjs-dist');
@@ -44,8 +46,11 @@ export async function extractXmlFromPdf(pdfBuffer: ArrayBuffer): Promise<string>
       source instanceof Map ? source.get(name) : (source as Record<string, Attachment>)[name];
 
     const RELEVANT = ['factur-x.xml', 'zugferd-invoice.xml', 'xrechnung.xml', 'basic-wl.xml'];
+    const fetchContent = (doc as LazyContent).getAttachmentContent?.bind(doc);
     for (const name of RELEVANT) {
-      const content = lookup(name)?.content;
+      const attachment = lookup(name);
+      if (!attachment) continue;
+      const content = attachment.content ?? (await fetchContent?.(name));
       if (content) return new TextDecoder().decode(content);
     }
 
