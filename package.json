@@ -18,6 +18,7 @@
     "workbox-window": "^7.4.1"
   },
   "dependencies": {
-    "pdfjs-dist": "^6.0.227"
-  }
+    "pdfjs-dist": "^6.4.299"
+  },
+  "packageManager": "pnpm@11.20.0"
 }
