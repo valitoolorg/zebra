@@ -19,7 +19,7 @@
  * Shape of one PDF attachment. Declared locally rather than imported, because
  * pdf.js changed both the container and this type across 6.x: up to 6.0 the
  * attachments came back as a plain object with a required `content`, from 6.1
- * on as a Map whose `content` is optional.
+ * on as a Map whose `content` may need loading via getAttachmentContent().
  */
 type Attachment = { content?: Uint8Array | null };
 
@@ -32,8 +32,13 @@ export async function extractXmlFromPdf(pdfBuffer: ArrayBuffer): Promise<string>
     import.meta.url
   ).href;
 
+  let task: ReturnType<typeof pdfjs.getDocument> | undefined;
   try {
-    const doc = await pdfjs.getDocument({ data: pdfBuffer }).promise;
+    task = pdfjs.getDocument({ data: pdfBuffer });
+    const doc = await task.promise;
+    const contentLoader = doc as unknown as {
+      getAttachmentContent?: (id: string) => Promise<Uint8Array | null>;
+    };
     const attachments = await doc.getAttachments();
     
     if (!attachments) throw new Error('NO_ATTACHMENTS');
@@ -45,7 +50,9 @@ export async function extractXmlFromPdf(pdfBuffer: ArrayBuffer): Promise<string>
 
     const RELEVANT = ['factur-x.xml', 'zugferd-invoice.xml', 'xrechnung.xml', 'basic-wl.xml'];
     for (const name of RELEVANT) {
-      const content = lookup(name)?.content;
+      const attachment = lookup(name);
+      if (!attachment) continue;
+      const content = attachment.content ?? await contentLoader.getAttachmentContent?.(name);
       if (content) return new TextDecoder().decode(content);
     }
 
@@ -54,5 +61,7 @@ export async function extractXmlFromPdf(pdfBuffer: ArrayBuffer): Promise<string>
     if (err.message === 'NO_ZUGFERD_XML' || err.message === 'NO_ATTACHMENTS') throw err;
     console.error('PDF.js:', err);
     throw new Error('PDF_LOAD_FAILED');
+  } finally {
+    await task?.destroy();
   }
 }

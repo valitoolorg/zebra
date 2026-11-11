@@ -18,7 +18,7 @@
 import {
   anonymizeIban, isValidIban,
   anonymizeBic, isValidBic,
-  anonymizeVatId, isValidVatId,
+  anonymizeVatId, isValidVatId, scrambleVatId,
 } from './checksums';
 
 /*
@@ -110,7 +110,12 @@ export function anonymizeXmlDoc(xmlDoc: Document): void {
    * already conformed. An invalid IBAN is scrambled like any other string and
    * stays invalid — repairing it would erase the defect under analysis.
    */
-  const replacementFor = (value: string, tag: string, parent: string): string => {
+  const replacementFor = (value: string, tag: string, parent: string, vat: boolean): string => {
+    if (vat) {
+      // Context identifies VAT independently of the national checksum support.
+      if (isValidVatId(value)) return value.slice(0, 2) + anonymizeVatId(value).slice(2);
+      return scrambleVatId(value, scramble);
+    }
     if (isValidIban(value)) return anonymizeIban(value);
     if (isValidVatId(value)) return anonymizeVatId(value);
     if (isBicContext(tag, parent) && isValidBic(value)) return anonymizeBic(value);
@@ -125,18 +130,18 @@ export function anonymizeXmlDoc(xmlDoc: Document): void {
     return scramble(value);
   };
 
-  const anonymizeValue = (text: string, tag: string, parent: string): string => {
+  const anonymizeValue = (text: string, tag: string, parent: string, vat = false): string => {
     const value = text.trim();
     if (!value) return text;
 
-    const key = `${isBicContext(tag, parent) ? 'bic' : ''}:${value}`;
+    const key = `${vat ? 'vat' : isBicContext(tag, parent) ? 'bic' : ''}:${value}`;
     let replacement = pseudonyms.get(key);
     if (replacement === undefined) {
-      replacement = replacementFor(value, tag, parent);
+      replacement = replacementFor(value, tag, parent, vat);
       pseudonyms.set(key, replacement);
     }
 
-    return text.replace(value, replacement); // keep surrounding whitespace
+    return text.replace(value, () => replacement!); // keep whitespace and literal dollar sequences
   };
 
   /** True if the element's content is technical and must be left alone. */
@@ -173,6 +178,11 @@ export function anonymizeXmlDoc(xmlDoc: Document): void {
     const el = node as Element;
     const tag = el.localName.toLowerCase();
     const parent = el.parentElement?.localName.toLowerCase() || '';
+    const vat = (tag === 'id' && parent === 'specifiedtaxregistration' && el.getAttribute('schemeID') === 'VA')
+      || (tag === 'companyid' && parent === 'partytaxscheme'
+        && Array.from(el.parentElement!.children).some(scheme =>
+          scheme.localName.toLowerCase() === 'taxscheme'
+          && Array.from(scheme.children).some(id => id.localName.toLowerCase() === 'id' && id.textContent?.trim() === 'VAT')));
 
     anonymizeAttributes(el, parent);
 
@@ -183,7 +193,7 @@ export function anonymizeXmlDoc(xmlDoc: Document): void {
       }
     } else if (!shouldKeep(tag, parent)) {
       for (const child of Array.from(el.childNodes)) {
-        if (isTextual(child)) child.textContent = anonymizeValue(child.textContent || '', tag, parent);
+        if (isTextual(child)) child.textContent = anonymizeValue(child.textContent || '', tag, parent, vat);
       }
     }
 

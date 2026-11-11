@@ -16,6 +16,8 @@ node_modules
 dist
 dist-ssr
 build
+playwright-report/
+test-results/
 
 # Misc
 .DS_Store

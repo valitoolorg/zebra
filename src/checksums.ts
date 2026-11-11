@@ -275,3 +275,28 @@ export function anonymizeVatId(value: string): string {
     if (national !== null) return country + national;
   }
 }
+
+/**
+ * Scrambles an unverified VAT number while retaining its exact leading prefix.
+ * Unsupported formats are not validated or repaired. If a supported number had
+ * an invalid checksum, an accidentally valid replacement is made invalid again.
+ */
+export function scrambleVatId(value: string, scramble: (text: string) => string): string {
+  const prefixLength = /^[A-Za-z]{2}/.test(value) ? 2 : 0;
+  let replacement = value.slice(0, prefixLength) + scramble(value.slice(prefixLength));
+
+  if (isKnownVatCountry(value) && !isValidVatId(value) && isValidVatId(replacement)) {
+    const rule = VAT_RULES[stripVat(value).slice(0, 2)];
+    const lastCheck = 2 + rule.checkAt + rule.checkLength - 1;
+    let position = 0;
+    for (let i = 0; i < replacement.length; i++) {
+      if (/[\s.-]/.test(replacement[i])) continue;
+      if (position++ === lastCheck) {
+        const digit = String((Number(replacement[i]) + 1) % 10);
+        replacement = replacement.slice(0, i) + digit + replacement.slice(i + 1);
+        break;
+      }
+    }
+  }
+  return replacement;
+}

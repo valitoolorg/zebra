@@ -41,6 +41,24 @@ ZEBRA is a privacy-focused web application designed to anonymize electronic invo
    npm run build
    ```
 
+### Regression tests
+
+With Node.js 24, install the locked dependencies and the test browser:
+
+```bash
+npm ci
+npx playwright install chromium
+npm test
+```
+
+On Linux CI hosts, use `npx playwright install --with-deps chromium` to install
+browser system dependencies as well. Playwright starts and stops a local Vite
+server on port 4173; the port must be free.
+
+The tests use only invented identifiers, synthetic XML, and an in-memory PDF
+with a synthetic XML attachment. No customer documents are needed. See
+[the notes for issues #1 and #2](docs/issues-1-2-vat-and-xml.md) for scope and limits.
+
 ## 🛠 Tech Stack
 
 - **Framework:** [Vite](https://vitejs.dev/) + TypeScript
