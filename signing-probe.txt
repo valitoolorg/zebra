@@ -1,1 +1,1 @@
-Synthetic signing probe. No user data.
+Synthetic automatic signing probe after configuration. No user data.
