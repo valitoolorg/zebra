@@ -16,6 +16,8 @@ env:
 
 jobs:
   build_site:
+    # GitHub Pages deployment is specific to the GitHub mirror.
+    if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -43,6 +45,7 @@ jobs:
           path: './dist'
 
   deploy:
+    if: github.server_url == 'https://github.com'
     needs: build_site
     runs-on: ubuntu-latest
     environment:

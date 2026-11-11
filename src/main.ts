@@ -18,6 +18,7 @@
 import './style.css';
 import { registerSW } from 'virtual:pwa-register';
 import { anonymizeXmlDoc } from './anonymizer';
+import { formatXml } from './xml-viewer';
 import { setLanguage, updateTranslations, getLanguage } from './i18n';
 import { setTheme, getTheme, applyTheme } from './theme';
 import { extractXmlFromPdf } from './pdf-extractor';
@@ -229,61 +230,6 @@ function attachHeaderEvents() {
     setTheme((e.currentTarget as HTMLButtonElement).dataset.theme as any);
     render();
   }));
-}
-
-/**
- * Renders the document, marking every value that differs from `counterpart`.
- *
- * Both documents share their element structure (the anonymized one is a clone),
- * so they can be walked in lockstep. Shown in either direction: in the anonymized
- * view the marks say what was replaced, in the original what will be — which is
- * what makes over- and under-anonymization visible at a glance.
- */
-function formatXml(doc: Document, counterpart?: Document | null): DocumentFragment {
-  const fragment = document.createDocumentFragment();
-
-  const span = (className: string, text: string, changed = false): HTMLSpanElement => {
-    const s = document.createElement('span');
-    s.className = changed ? `${className} changed` : className;
-    s.textContent = text;
-    return s;
-  };
-
-  const traverse = (node: Node, other: Element | undefined, indent = 0) => {
-    if (node.nodeType !== Node.ELEMENT_NODE) return;
-    const el = node as Element;
-
-    // Only compare against a counterpart that really is the same element.
-    const twin = other?.nodeName === el.nodeName ? other : undefined;
-    const spacing = '  '.repeat(indent);
-    const line = document.createElement('div');
-
-    line.appendChild(span('xml-tag', `${spacing}<${el.nodeName}`));
-    for (const attr of Array.from(el.attributes)) {
-      line.appendChild(span('xml-tag', ` ${attr.name}="`));
-      line.appendChild(span('xml-attr-value', attr.value, twin !== undefined && twin.getAttribute(attr.name) !== attr.value));
-      line.appendChild(span('xml-tag', '"'));
-    }
-    line.appendChild(span('xml-tag', '>'));
-
-    if (el.children.length > 0) {
-      fragment.appendChild(line);
-      for (let i = 0; i < el.children.length; i++) {
-        traverse(el.children[i], twin?.children[i], indent + 1);
-      }
-      const closeLine = document.createElement('div');
-      closeLine.appendChild(span('xml-tag', `${spacing}</${el.nodeName}>`));
-      fragment.appendChild(closeLine);
-    } else {
-      const value = el.textContent || '';
-      line.appendChild(span('xml-value', value, twin !== undefined && twin.textContent !== value));
-      line.appendChild(span('xml-tag', `</${el.nodeName}>`));
-      fragment.appendChild(line);
-    }
-  };
-
-  traverse(doc.documentElement, counterpart?.documentElement ?? undefined);
-  return fragment;
 }
 
 function downloadFile() {
