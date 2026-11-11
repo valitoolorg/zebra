@@ -71,9 +71,11 @@ Locked installations were checked with `npm ci` and
 versions; the stale npm lock also needed synchronization with the existing
 package manifest. `git diff --check` was run before submitting the change.
 
-`npm audit` reports 10 dependency findings (4 high, 4 moderate, 2 low), including
-existing build-tool dependencies. Resolving that dependency tree is outside these
-two fixes; no audit-fix command or security-policy bypass was applied.
+At completion of these two fixes, `npm audit` reported 10 dependency findings
+(4 high, 4 moderate, 2 low), including existing build-tool dependencies. The
+subsequent [dependency audit remediation](npm-audit.md) resolves those findings
+and the additional findings from the older pnpm lock. No security-policy bypass
+was applied.
 
 ## Limits
 

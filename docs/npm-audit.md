@@ -63,7 +63,7 @@ No deployment is implied by these local checks.
 
 The existing GitHub changes to lazy PDF attachment loading and the pnpm-based
 deployment were retained when reconciling the repository histories. The current
-manifest retains the PDF.js 6.4 minimum and the deployment's declared pnpm version.
+manifest uses PDF.js 6.5.438 and retains the deployment's declared pnpm version.
 The repaired npm lock is retained for reproducible npm audit and test runs.
 
 GitHub Pages build/deploy jobs explicitly require `github.server_url` to equal
